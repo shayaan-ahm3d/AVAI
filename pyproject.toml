@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "ipykernel>=7.1.0",
+    "lpips>=0.1.4",
     "matplotlib>=3.10.7",
     "nbconvert>=7.16.6",
     "scikit-image>=0.25.2",

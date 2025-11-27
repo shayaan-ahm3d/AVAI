@@ -2,8 +2,9 @@ import numpy as np
 import torch
 from pathlib import Path
 
+import lpips
 from PIL import Image as PILImage
-from skimage.metrics import peak_signal_noise_ratio
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from dataset import Div2kDataset, Mode
 from models import get_net
@@ -18,7 +19,7 @@ use_gpu = torch.cuda.is_available()
 device = torch.device('cuda' if use_gpu else 'cpu')
 dtype = torch.float32
 
-PLOT = True
+PLOT = False
 
 low_res_path = Path("dataset/DIV2K_train_LR_x8")
 high_res_path = Path("dataset/DIV2K_train_HR")
@@ -41,6 +42,9 @@ PATCH_SIZE = 256
 PATCH_OVERLAP = 0
 OUTPUT_DIR = Path("data/sr_outputs")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+lpips_model = lpips.LPIPS(net='alex').to(device)
+lpips_model.eval()
 
 mse = torch.nn.MSELoss().to(device=device)
 
@@ -131,6 +135,23 @@ def run_dip_on_patch(high_patch_np, patch_idx, log_progress=False):
     return torch_to_np(final_patch)
 
 
+def _ssim(chw_a, chw_b):
+    a = np.clip(chw_a, 0, 1).transpose(1, 2, 0)
+    b = np.clip(chw_b, 0, 1).transpose(1, 2, 0)
+    return structural_similarity(a, b, data_range=1.0, channel_axis=2)
+
+
+def _lpips(chw_a, chw_b):
+    def _to_tensor(arr):
+        tens = torch.from_numpy(arr).to(device=device, dtype=torch.float32)
+        tens = tens.unsqueeze(0)
+        return tens * 2.0 - 1.0  # scale [0,1] -> [-1,1]
+
+    with torch.no_grad():
+        score = lpips_model(_to_tensor(chw_a), _to_tensor(chw_b))
+    return float(score.squeeze().cpu().numpy())
+
+
 def super_resolve_image(low_img, high_img, log_progress=False):
     low_np = pil_to_np(low_img)
     high_np = pil_to_np(high_img)
@@ -163,10 +184,33 @@ def super_resolve_image(low_img, high_img, log_progress=False):
 
     baseline_psnr = peak_signal_noise_ratio(high_np, lr_bicubic_np)
     final_psnr = peak_signal_noise_ratio(high_np, final_output)
+    baseline_ssim = _ssim(high_np, lr_bicubic_np)
+    final_ssim = _ssim(high_np, final_output)
+    baseline_lpips = _lpips(high_np, lr_bicubic_np)
+    final_lpips = _lpips(high_np, final_output)
 
-    return final_output, low_np, high_np, lr_bicubic_np, baseline_psnr, final_psnr, len(patch_coords)
+    return (
+        final_output,
+        low_np,
+        high_np,
+        lr_bicubic_np,
+        baseline_psnr,
+        final_psnr,
+        baseline_ssim,
+        final_ssim,
+        baseline_lpips,
+        final_lpips,
+        len(patch_coords),
+    )
 
-all_metrics = []
+all_psnr = []
+all_ssim = []
+all_lpips = []
+metrics_log_path = OUTPUT_DIR / "metrics.log"
+metrics_log_path.write_text(
+    "sample,baseline_psnr,dip_psnr,baseline_ssim,dip_ssim,baseline_lpips,dip_lpips,num_patches\n",
+    encoding="utf-8",
+)
 
 for sample_idx in range(len(dataset)):
     low_img_raw, high_img_raw = dataset[sample_idx]
@@ -176,13 +220,19 @@ for sample_idx in range(len(dataset)):
 
     log_progress = PLOT and sample_idx == 0
 
-    (final_output,
-     low_np,
-     high_np,
-     lr_bicubic_np,
-     baseline_psnr,
-     final_psnr,
-     num_patches) = super_resolve_image(low_img, high_img, log_progress=log_progress)
+    (
+        final_output,
+        low_np,
+        high_np,
+        lr_bicubic_np,
+        baseline_psnr,
+        final_psnr,
+        baseline_ssim,
+        final_ssim,
+        baseline_lpips,
+        final_lpips,
+        num_patches,
+    ) = super_resolve_image(low_img, high_img, log_progress=log_progress)
 
     output_img = np_to_pil(np.clip(final_output, 0, 1))
     output_path = OUTPUT_DIR / f"{sample_name}_sr.png"
@@ -190,19 +240,28 @@ for sample_idx in range(len(dataset)):
 
     print(
         f"[{sample_idx + 1}/{len(dataset)}] {sample_name}: "
-        f"baseline {baseline_psnr:.2f} dB -> DIP {final_psnr:.2f} dB ({num_patches} patches)."
+        f"baseline {baseline_psnr:.2f} dB / {baseline_ssim:.3f} SSIM / {baseline_lpips:.3f} LPIPS -> "
+        f"DIP {final_psnr:.2f} dB / {final_ssim:.3f} SSIM / {final_lpips:.3f} LPIPS ({num_patches} patches)."
     )
     print(f"Saved output to {output_path}")
 
-    all_metrics.append(final_psnr)
+    with metrics_log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(
+            f"{sample_name},{baseline_psnr:.4f},{final_psnr:.4f},{baseline_ssim:.4f},{final_ssim:.4f},{baseline_lpips:.4f},{final_lpips:.4f},{num_patches}\n"
+        )
 
-    if log_progress:
-        plot_image_grid([
-            np.clip(lr_bicubic_np, 0, 1),
-            np.clip(final_output, 0, 1),
-            np.clip(high_np, 0, 1)
-        ], factor=13, nrow=3)
+    all_psnr.append(final_psnr)
+    all_ssim.append(final_ssim)
+    all_lpips.append(final_lpips)
 
-if all_metrics:
-    avg_psnr = sum(all_metrics) / len(all_metrics)
-    print(f'Average DIP PSNR over {len(all_metrics)} images: {avg_psnr:.2f} dB')
+if all_psnr:
+    avg_psnr = sum(all_psnr) / len(all_psnr)
+    avg_ssim = sum(all_ssim) / len(all_ssim)
+    avg_lpips = sum(all_lpips) / len(all_lpips)
+    summary = (
+        f'Average DIP metrics over {len(all_psnr)} images: '
+        f'{avg_psnr:.2f} dB PSNR, {avg_ssim:.3f} SSIM, {avg_lpips:.3f} LPIPS'
+    )
+    print(summary)
+    with metrics_log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(summary + "\n")
