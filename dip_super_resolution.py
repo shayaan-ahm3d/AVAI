@@ -2,11 +2,12 @@ import numpy as np
 import torch
 from pathlib import Path
 
+from PIL import Image as PILImage
 from skimage.metrics import peak_signal_noise_ratio
 
 from dataset import Div2kDataset, Mode
 from models import get_net
-from utils.common_utils import get_noise, np_to_torch, pil_to_np, torch_to_np
+from utils.common_utils import get_noise, np_to_pil, np_to_torch, pil_to_np, torch_to_np
 from utils.denoising_utils import get_params, optimize, plot_image_grid
 from utils.sr_utils import crop_image
 
@@ -23,13 +24,6 @@ low_res_path = Path("dataset/DIV2K_train_LR_x8")
 high_res_path = Path("dataset/DIV2K_train_HR")
 dataset = Div2kDataset(low_res_path, high_res_path, Mode.TRAIN)
 
-# Use the first sample for demonstration
-low = crop_image(dataset[0][0])
-high = crop_image(dataset[0][1])
-
-low_np = pil_to_np(low)
-high_np = pil_to_np(high)
-
 # Optimization and network hyperparameters
 pad = 'reflection'
 OPT_OVER = 'net'
@@ -45,6 +39,8 @@ input_depth = 3
 # Patch-specific settings
 PATCH_SIZE = 256
 PATCH_OVERLAP = 0
+OUTPUT_DIR = Path("data/sr_outputs")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 mse = torch.nn.MSELoss().to(device=device)
 
@@ -91,7 +87,7 @@ def generate_patch_coords(height, width, patch_size, overlap):
             yield top, left, bottom, right
 
 
-def run_dip_on_patch(high_patch_np, patch_idx):
+def run_dip_on_patch(high_patch_np, patch_idx, log_progress=False):
     net = build_sr_net()
     net_input = get_noise(
         input_depth,
@@ -120,7 +116,7 @@ def run_dip_on_patch(high_patch_np, patch_idx):
         loss = mse(out, high_patch_torch)
         loss.backward()
 
-        if PLOT and patch_idx == 0 and iteration % show_every == 0:
+        if log_progress and patch_idx == 0 and iteration % show_every == 0:
             print(f'Patch {patch_idx} | iter {iteration} | loss {loss.item():.6f}')
 
         iteration += 1
@@ -135,48 +131,78 @@ def run_dip_on_patch(high_patch_np, patch_idx):
     return torch_to_np(final_patch)
 
 
-height, width = high_np.shape[1:]
-patch_coords = list(generate_patch_coords(height, width, PATCH_SIZE, PATCH_OVERLAP))
-print(f'Training {len(patch_coords)} patches with {PATCH_OVERLAP}px overlap...')
+def super_resolve_image(low_img, high_img, log_progress=False):
+    low_np = pil_to_np(low_img)
+    high_np = pil_to_np(high_img)
 
-reconstruction = np.zeros_like(high_np)
-weight_map = np.zeros((1, height, width), dtype=np.float32)
+    height, width = high_np.shape[1:]
+    patch_coords = list(generate_patch_coords(height, width, PATCH_SIZE, PATCH_OVERLAP))
+    if log_progress:
+        print(f'Training {len(patch_coords)} patches with {PATCH_OVERLAP}px overlap...')
 
-for idx, (top, left, bottom, right) in enumerate(patch_coords):
-    high_patch_np = high_np[:, top:bottom, left:right]
-    patch_out = run_dip_on_patch(high_patch_np, idx)
+    reconstruction = np.zeros_like(high_np)
+    weight_map = np.zeros((1, height, width), dtype=np.float32)
 
-    ph = min(patch_out.shape[1], bottom - top)
-    pw = min(patch_out.shape[2], right - left)
+    for idx, (top, left, bottom, right) in enumerate(patch_coords):
+        high_patch_np = high_np[:, top:bottom, left:right]
+        patch_out = run_dip_on_patch(high_patch_np, idx, log_progress=log_progress)
 
-    reconstruction[:, top:top + ph, left:left + pw] += patch_out[:, :ph, :pw]
-    weight_map[:, top:top + ph, left:left + pw] += 1.0
+        ph = min(patch_out.shape[1], bottom - top)
+        pw = min(patch_out.shape[2], right - left)
 
-    if PLOT:
-        print(f'Finished patch {idx + 1}/{len(patch_coords)}')
+        reconstruction[:, top:top + ph, left:left + pw] += patch_out[:, :ph, :pw]
+        weight_map[:, top:top + ph, left:left + pw] += 1.0
 
-final_output = reconstruction / np.clip(weight_map, 1e-8, None)
+        if log_progress:
+            print(f'Finished patch {idx + 1}/{len(patch_coords)}')
 
-# Bicubic baseline for fair comparison (upscale LR to HR size)
-from PIL import Image as PILImage
-lr_bicubic = low.resize(high.size, PILImage.Resampling.BICUBIC)
-lr_bicubic_np = pil_to_np(lr_bicubic)
+    final_output = reconstruction / np.clip(weight_map, 1e-8, None)
 
-baseline_psnr = peak_signal_noise_ratio(high_np, lr_bicubic_np)
-final_psnr = peak_signal_noise_ratio(high_np, final_output)
-print(f'Bicubic baseline PSNR: {baseline_psnr:.2f} dB')
-print(f'Final stitched PSNR: {final_psnr:.2f} dB')
+    lr_bicubic = low_img.resize(high_img.size, PILImage.Resampling.BICUBIC)
+    lr_bicubic_np = pil_to_np(lr_bicubic)
 
-# Save final output
-from utils.common_utils import np_to_pil
-output_img = np_to_pil(np.clip(final_output, 0, 1))
-output_path = Path("data/sr_output.png")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-output_img.save(output_path)
-print(f'Saved output to {output_path}')
+    baseline_psnr = peak_signal_noise_ratio(high_np, lr_bicubic_np)
+    final_psnr = peak_signal_noise_ratio(high_np, final_output)
 
-plot_image_grid([
-    np.clip(lr_bicubic_np, 0, 1),
-    np.clip(final_output, 0, 1),
-    np.clip(high_np, 0, 1)
-], factor=13, nrow=3)
+    return final_output, low_np, high_np, lr_bicubic_np, baseline_psnr, final_psnr, len(patch_coords)
+
+all_metrics = []
+
+for sample_idx in range(len(dataset)):
+    low_img_raw, high_img_raw = dataset[sample_idx]
+    low_img = crop_image(low_img_raw)
+    high_img = crop_image(high_img_raw)
+    sample_name = dataset.low_paths[sample_idx].stem if hasattr(dataset, 'low_paths') else f"sample_{sample_idx:05d}"
+
+    log_progress = PLOT and sample_idx == 0
+
+    (final_output,
+     low_np,
+     high_np,
+     lr_bicubic_np,
+     baseline_psnr,
+     final_psnr,
+     num_patches) = super_resolve_image(low_img, high_img, log_progress=log_progress)
+
+    output_img = np_to_pil(np.clip(final_output, 0, 1))
+    output_path = OUTPUT_DIR / f"{sample_name}_sr.png"
+    output_img.save(output_path)
+
+    print(
+        f"[{sample_idx + 1}/{len(dataset)}] {sample_name}: "
+        f"baseline {baseline_psnr:.2f} dB -> DIP {final_psnr:.2f} dB ({num_patches} patches)."
+    )
+    print(f"Saved output to {output_path}")
+
+    all_metrics.append(final_psnr)
+
+    if log_progress:
+        plot_image_grid([
+            np.clip(lr_bicubic_np, 0, 1),
+            np.clip(final_output, 0, 1),
+            np.clip(high_np, 0, 1)
+        ], factor=13, nrow=3)
+
+if all_metrics:
+    avg_psnr = sum(all_metrics) / len(all_metrics)
+    print(f'Average DIP PSNR over {len(all_metrics)} images: {avg_psnr:.2f} dB')
