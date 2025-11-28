@@ -21,8 +21,8 @@ dtype = torch.float32
 
 PLOT = False
 
-low_res_path = Path("dataset/DIV2K_train_LR_x8")
-high_res_path = Path("dataset/DIV2K_train_HR")
+low_res_path = Path("dataset/DIV2K_valid_LR_x8")
+high_res_path = Path("dataset/DIV2K_valid_HR")
 dataset = Div2kDataset(low_res_path, high_res_path, Mode.TRAIN)
 
 # Optimization and network hyperparameters
