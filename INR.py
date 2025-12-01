@@ -19,12 +19,14 @@ img_siren = Siren(in_features=2, out_features=3, hidden_features=256,
 
 lpips_model = lpips.LPIPS().to(device).eval()
 
-total_steps = 500 # Since the whole image is our dataset, this just means 500 gradient descent steps.
-steps_til_summary = 10
+total_steps = 5000 # Since the whole image is our dataset, this just means 5000 gradient descent steps.
+steps_til_summary = total_steps // 10
 channels = 3
 optimizer = torch.optim.Adam(img_siren.parameters() ,lr=1e-5)
-low_size = (255, 175) 
+low_size = (175, 255)
 image = ImagePreparation_color('0001x8.png', low_size)
+print(f"{image.height=}")
+print(f"{image.width=}")
 dataloader = DataLoader(image, batch_size=1, pin_memory=True, num_workers=cpu_count())
 mse = MSELoss()
 torch.cuda.empty_cache()
@@ -35,21 +37,23 @@ model_input_coords, ground_truth_pixel_values = model_input_coords.cuda(), groun
 for step in range(total_steps):
     model_output_pixel_values, coords = img_siren(model_input_coords)
 
-    out = model_output_pixel_values.reshape([1, low_size[1], low_size[0], 3]).permute([0,3,1,2])
-    gt = ground_truth_pixel_values.reshape([1, low_size[1], low_size[0], 3]).permute([0,3,1,2])
+    out = model_output_pixel_values.reshape([1, low_size[0], low_size[1], 3]).permute([0,3,1,2])
+    gt = ground_truth_pixel_values.reshape([1, low_size[0], low_size[1], 3]).permute([0,3,1,2])
 
     loss = mse(out, gt)
     
     if not step % steps_til_summary:
-        print("3 outputs: Step %d, Total loss %0.9f" % (step, loss))
+        print("Step %d, Total Loss %0.9f" % (step, loss))
 
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-high_size = (2040, 1404)
+high_size = (1404, 2040)
 with torch.no_grad():
     high = ImagePreparation_color('0001.png', high_size)
+    print(f"{high.height=}")
+    print(f"{high.width=}")
     dataloader = DataLoader(high, batch_size=1, pin_memory=True, num_workers=cpu_count())
 
     model_input_coords, ground_truth_pixel_values = next(iter(dataloader))
@@ -58,7 +62,7 @@ with torch.no_grad():
     model_output_pixel_values, coords = img_siren(model_input_coords)
     loss = mse(model_output_pixel_values, ground_truth_pixel_values)
 
-    fig, axes = plt.subplots(1,2, figsize=(32,8))
+    fig, axes = plt.subplots(1, 2, figsize=(16,8))
     axes[0].imshow(map_to_01(ground_truth_pixel_values).cpu().view(high_size[0], high_size[1], 3).detach().numpy())
     axes[0].set_title('Ground Truth', fontsize=20)
     axes[1].imshow(map_to_01(model_output_pixel_values).cpu().view(high_size[0], high_size[1], 3).detach().numpy())
