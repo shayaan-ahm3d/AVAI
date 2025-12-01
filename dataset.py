@@ -56,35 +56,41 @@ class Div2kDataset(Dataset):
     
 
 class ImagePreparation_color(Dataset):
-  '''a class which takes as input a RGB image and preprocess it into a list of coords and pixels of the same image cropped and resized into sidelenght*sidelength
-  folder: string
-  sidelength: int'''
-  def __init__(self, name, sidelength):
-      super().__init__()
-      img = Image.open(name)
-      if img.mode=='L':
-        img= img.convert('RGB')
-        
-      red, green, blue = img.split()
-      transform = Compose([
-      Resize(sidelength),
-      ToTensor(),
-      Normalize(torch.Tensor([0.5]), torch.Tensor([0.5]))
-      ])
-      red = transform(red)
-      green = transform(green)
-      blue = transform(blue)
-      self.redpixels = red.permute(1, 2, 0).view(-1, 1)
-      self.greenpixels = green.permute(1, 2, 0).view(-1, 1)
-      self.bluepixels = blue.permute(1, 2, 0).view(-1, 1)
-      self.coords = get_mgrid(sidelength, 2)
+    '''a class which takes as input a RGB image and preprocess it into a list of coords and pixels of the same image resized into height*width.'''
+    def __init__(self, name, size):
+            super().__init__()
+            img = Image.open(name)
+            if img.mode=='L':
+                img= img.convert('RGB')
 
-      self.pixels= torch.cat((self.redpixels,self.greenpixels,self.bluepixels),1)
+            if isinstance(size, int):
+                    target_height = size
+                    target_width = size
+            else:
+                    target_height, target_width = size
+
+            red, green, blue = img.split()
+            transform = Compose([
+            Resize((target_height, target_width)),
+            ToTensor(),
+            Normalize(torch.Tensor([0.5]), torch.Tensor([0.5]))
+            ])
+            red = transform(red)
+            green = transform(green)
+            blue = transform(blue)
+            self.redpixels = red.permute(1, 2, 0).view(-1, 1)
+            self.greenpixels = green.permute(1, 2, 0).view(-1, 1)
+            self.bluepixels = blue.permute(1, 2, 0).view(-1, 1)
+            self.coords = get_mgrid(target_height, target_width)
+            self.height = target_height
+            self.width = target_width
+
+            self.pixels= torch.cat((self.redpixels,self.greenpixels,self.bluepixels),1)
         
-  def __len__(self):
+    def __len__(self):
       return 1
 
-  def __getitem__(self, idx):    
+    def __getitem__(self, idx):    
       if idx > 0: raise IndexError
       return self.coords, self.pixels
   

@@ -23,8 +23,8 @@ total_steps = 500 # Since the whole image is our dataset, this just means 500 gr
 steps_til_summary = 10
 channels = 3
 optimizer = torch.optim.Adam(img_siren.parameters() ,lr=1e-5)
-dim = 128
-image = ImagePreparation_color('0001x8.png', dim)
+low_size = (255, 175) 
+image = ImagePreparation_color('0001x8.png', low_size)
 dataloader = DataLoader(image, batch_size=1, pin_memory=True, num_workers=cpu_count())
 mse = MSELoss()
 torch.cuda.empty_cache()
@@ -35,8 +35,8 @@ model_input_coords, ground_truth_pixel_values = model_input_coords.cuda(), groun
 for step in range(total_steps):
     model_output_pixel_values, coords = img_siren(model_input_coords)
 
-    out = model_output_pixel_values.reshape([1,dim,dim,3]).permute([0,3,1,2])
-    gt = ground_truth_pixel_values.reshape([1,dim,dim,3]).permute([0,3,1,2])
+    out = model_output_pixel_values.reshape([1, low_size[1], low_size[0], 3]).permute([0,3,1,2])
+    gt = ground_truth_pixel_values.reshape([1, low_size[1], low_size[0], 3]).permute([0,3,1,2])
 
     loss = mse(out, gt)
     
@@ -47,8 +47,9 @@ for step in range(total_steps):
     loss.backward()
     optimizer.step()
 
+high_size = (2040, 1404)
 with torch.no_grad():
-    high = ImagePreparation_color('0001.png', 512)
+    high = ImagePreparation_color('0001.png', high_size)
     dataloader = DataLoader(high, batch_size=1, pin_memory=True, num_workers=cpu_count())
 
     model_input_coords, ground_truth_pixel_values = next(iter(dataloader))
@@ -58,8 +59,8 @@ with torch.no_grad():
     loss = mse(model_output_pixel_values, ground_truth_pixel_values)
 
     fig, axes = plt.subplots(1,2, figsize=(32,8))
-    axes[0].imshow(map_to_01(ground_truth_pixel_values).cpu().view(512,512,3).detach().numpy())
-    axes[1].imshow(map_to_01(model_output_pixel_values).cpu().view(512,512,3).detach().numpy())
+    axes[0].imshow(map_to_01(ground_truth_pixel_values).cpu().view(high_size[0], high_size[1], 3).detach().numpy())
+    axes[1].imshow(map_to_01(model_output_pixel_values).cpu().view(high_size[0], high_size[1], 3).detach().numpy())
 
     plt.savefig("comparison")
 
