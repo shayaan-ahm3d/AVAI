@@ -24,8 +24,8 @@ def train_model(model: Module, low_res_image: torch.Tensor, steps: int) -> None:
     for step in range(steps):
         model_output_pixel_values, _ = model(input_coords)
 
-        out = model_output_pixel_values.reshape([1, low_res_image.shape[1], low_res_image.shape[0], 3]).permute([0, 3, 1, 2])
-        gt = ground_truth_pixel_values.reshape([1, low_res_image.shape[1], low_res_image.shape[0], 3]).permute([0, 3, 1, 2])
+        out = model_output_pixel_values.reshape([low_res_image.shape[1], low_res_image.shape[2], 3]).permute([2, 0, 1])
+        gt = ground_truth_pixel_values.reshape([low_res_image.shape[1], low_res_image.shape[2], 3]).permute([2, 0, 1])
 
         loss = mse(out, gt)
         
@@ -46,9 +46,9 @@ def evaluate_model(model: Module, high_res_image: torch.Tensor, index: int):
         loss = mse(model_output_pixel_values, ground_truth_pixel_values)
 
         _, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 8))
-        axes[0].imshow(convert_pixel_value_range(ground_truth_pixel_values).cpu().view(high_res_image.shape[1], high_res_image.shape[0], 3).detach().numpy())
+        axes[0].imshow(convert_pixel_value_range(ground_truth_pixel_values).cpu().view(high_res_image.shape[1], high_res_image.shape[2], 3).detach().numpy())
         axes[0].set_title("Ground Truth", fontsize=20)
-        axes[1].imshow(convert_pixel_value_range(model_output_pixel_values).cpu().view(high_res_image.shape[1], high_res_image.shape[0], 3).detach().numpy())
+        axes[1].imshow(convert_pixel_value_range(model_output_pixel_values).cpu().view(high_res_image.shape[1], high_res_image.shape[2], 3).detach().numpy())
         axes[1].set_title("Model Output", fontsize=20)
         
         plt.savefig(f"outputs/INR/{index}-SISR")
@@ -63,7 +63,7 @@ optimiser = torch.optim.Adam(super_resolve.parameters() , lr=1e-5)
 # LPIPS model to calculate metrics
 lpips_model = LPIPS().to(DEVICE).eval()
 # Since the whole image is our dataset, this is just the number of gradient descent steps.
-total_steps = 10_000
+total_steps = 1000
 steps_til_summary = total_steps // 10
 
 low_res_path = Path("dataset/DIV2K_train_LR_x8")
@@ -73,8 +73,10 @@ transform = Compose([
     Normalize(mean=torch.Tensor([0.5, 0.5, 0.5]), std=torch.Tensor([0.5, 0.5, 0.5]))
     ])
 dataset = Div2kDataset(low_root=low_res_path, high_root=high_res_path, transform=transform, mode=Mode.TEST)
-dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=cpu_count())
 
-for i, (low, high) in enumerate(dataloader):
+for i, (low, high) in enumerate(iter(dataset)):
+    low = low.to(DEVICE)
+    high = high.to(DEVICE)
+    
     train_model(super_resolve, low, total_steps)
     evaluate_model(super_resolve, high, i)

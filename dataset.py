@@ -8,6 +8,8 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose, ToTensor, Normalize
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 class ImagePair(NamedTuple):
     low: Tensor
     high: Tensor
@@ -44,17 +46,18 @@ class Div2kDataset(Dataset):
         low_image = Image.open(self.low_paths[idx])
         high_image = Image.open(self.high_paths[idx])
 
-        low_image_tensor: Tensor = self.transform(low_image)
-        high_image_tensor: Tensor = self.transform(high_image)
+        low_image_tensor: Tensor = self.transform(low_image).to(DEVICE)
+        high_image_tensor: Tensor = self.transform(high_image).to(DEVICE)
 
         pair = ImagePair(low_image_tensor, high_image_tensor)
         return pair
 
     @staticmethod
     def get_coordinate_to_pixel_value_mapping(image: Tensor) -> tuple[Tensor, Tensor]:
-        """Used for implicit neural representations (INR) only"""    
-        coords: Tensor = get_mgrid(image.shape[1], image.shape[0])
-        pixels: Tensor = image.permute(1, 2, 0).contiguous().view(image.shape[1] * image.shape[0], NUM_CHANNELS)
+        """Used for implicit neural representations (INR) only"""
+        coords: Tensor = get_mgrid(image.shape[1], image.shape[2]).to(DEVICE)
+        pixels: Tensor = image.permute(1, 2, 0).contiguous().view(image.shape[1] * image.shape[2], NUM_CHANNELS).to(DEVICE)
+
         return coords, pixels
 
     def _collect_files(self, root: Path) -> list[Path]:
@@ -62,28 +65,6 @@ class Div2kDataset(Dataset):
             p for p in Path(root).rglob("*")
             if p.is_file()
         ])
-    
-
-# class Div2kInr(Dataset):
-#     def __init__(self, path: Path) -> None:
-#             super().__init__()
-#             self.image = Image.open(path)
-#             transform = Compose([
-#                 ToTensor(),
-#                 Normalize(mean=torch.Tensor([0.5, 0.5, 0.5]), std=torch.Tensor([0.5, 0.5, 0.5]))
-#             ])
-
-            
-            
-
-#     def __len__(self) -> int:
-#       return 1
-
-#     def __getitem__(self, idx) -> tuple[Tensor, Tensor]:
-#       if idx > 0: raise IndexError("Single image super resolution method, therefore only 1 image!")
-#       return self.coords, self.pixels
-  
-# ### Step 2 Data Preparation
 
 # Let's generate a grid of coordinates over a 2D space and reshape the output into a flattened format.
 def get_mgrid(side_len1: int, side_len2: int, dim: int = 2) -> Tensor:
