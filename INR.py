@@ -63,7 +63,7 @@ optimiser = torch.optim.Adam(super_resolve.parameters() , lr=1e-5)
 # LPIPS model to calculate metrics
 lpips_model = LPIPS().to(DEVICE).eval()
 # Since the whole image is our dataset, this is just the number of gradient descent steps.
-total_steps = 1000
+total_steps = 10_000
 steps_til_summary = total_steps // 10
 
 low_res_path = Path("dataset/DIV2K_train_LR_x8")
@@ -77,6 +77,6 @@ dataset = Div2kDataset(low_root=low_res_path, high_root=high_res_path, transform
 for i, (low, high) in enumerate(iter(dataset)):
     low = low.to(DEVICE)
     high = high.to(DEVICE)
-    
+
     train_model(super_resolve, low, total_steps)
     evaluate_model(super_resolve, high, i)
