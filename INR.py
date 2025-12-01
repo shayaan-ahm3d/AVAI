@@ -19,7 +19,7 @@ super_resolve = Siren(in_features=2, out_features=3, hidden_features=256,
 
 lpips_model = lpips.LPIPS().to(device).eval()
 
-total_steps = 5000 # Since the whole image is our dataset, this just means 5000 gradient descent steps.
+total_steps = 10_000 # Since the whole image is our dataset, this just means 5000 gradient descent steps.
 steps_til_summary = total_steps // 10
 
 channels = 3
@@ -34,8 +34,8 @@ model_input_coords, ground_truth_pixel_values = model_input_coords.to(device), g
 for step in range(total_steps):
     model_output_pixel_values, coords = super_resolve(model_input_coords)
 
-    out = model_output_pixel_values.reshape([1, low_res_image.image.width, low_res_image.image.height, 3]).permute([0, 3, 1, 2])
-    gt = ground_truth_pixel_values.reshape([1, low_res_image.image.width, low_res_image.image.height, 3]).permute([0, 3, 1, 2])
+    out = model_output_pixel_values.reshape([1, low_res_image.image.height, low_res_image.image.width, 3]).permute([0, 3, 1, 2])
+    gt = ground_truth_pixel_values.reshape([1, low_res_image.image.height, low_res_image.image.width, 3]).permute([0, 3, 1, 2])
 
     loss = mse(out, gt)
     
@@ -57,9 +57,9 @@ with torch.no_grad():
     loss = mse(model_output_pixel_values, ground_truth_pixel_values)
 
     fig, axes = plt.subplots(1, 2, figsize=(16,8))
-    axes[0].imshow(convert_pixel_value_range(ground_truth_pixel_values).cpu().view(high_res_image.image.width, high_res_image.image.height, 3).detach().numpy())
+    axes[0].imshow(convert_pixel_value_range(ground_truth_pixel_values).cpu().view(high_res_image.image.height, high_res_image.image.width, 3).detach().numpy())
     axes[0].set_title("Ground Truth", fontsize=20)
-    axes[1].imshow(convert_pixel_value_range(model_output_pixel_values).cpu().view(high_res_image.image.width, high_res_image.image.height, 3).detach().numpy())
+    axes[1].imshow(convert_pixel_value_range(model_output_pixel_values).cpu().view(high_res_image.image.height, high_res_image.image.width, 3).detach().numpy())
     axes[1].set_title("Model Output", fontsize=20)
     
     plt.savefig("comparison")

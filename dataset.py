@@ -60,13 +60,13 @@ class Div2kInr(Dataset):
             super().__init__()
             self.image = Image.open(path)
             transform = Compose([
-                Resize((self.image.width, self.image.height)),
+                Resize((self.image.height, self.image.width)),
                 ToTensor(),
                 Normalize(mean=torch.Tensor([0.5, 0.5, 0.5]), std=torch.Tensor([0.5, 0.5, 0.5]))
             ])
 
-            self.coords: Tensor = get_mgrid(self.image.width, self.image.height)
-            self.pixels: Tensor = transform(self.image).permute(1, 2, 0).contiguous().view(self.image.width * self.image.height, 3)
+            self.coords: Tensor = get_mgrid(self.image.height, self.image.width)
+            self.pixels: Tensor = transform(self.image).permute(1, 2, 0).contiguous().view(self.image.height * self.image.width, 3)
 
     def __len__(self) -> int:
       return 1
