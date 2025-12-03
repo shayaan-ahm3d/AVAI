@@ -12,7 +12,7 @@ from lpips import LPIPS
 import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-ADD_NOISE = True
+ADD_NOISE = False
 NOISE_STD = 0.1
 SAVE_EVERY = 10
 EXTRA_DOWNSCALE_2X = True
@@ -109,6 +109,8 @@ def evaluate_model(model: Module, high_res_image: torch.Tensor, low_res_image: t
         axes[2].set_title("Ground Truth", fontsize=20)
         
         figure_path: str = f"outputs/INR/{index}.png" if not ADD_NOISE else f"outputs/INR/{index}_noise_std={NOISE_STD}.png"
+        if EXTRA_DOWNSCALE_2X:
+            figure_path = "x16_" + figure_path
         plt.savefig(figure_path)
         plt.close()
 
