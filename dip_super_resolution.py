@@ -16,6 +16,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+dtype = torch.float32
 
 PLOT = False
 
@@ -61,7 +62,7 @@ def build_sr_net():
         num_scales=5,
         upsample_mode='bilinear',
     )
-    return net.to(device=device)
+    return net.to(device=device, dtype=dtype)
 
 
 def _sliding_window_indices(length, window, stride):
@@ -97,14 +98,14 @@ def run_dip_on_patch(hr_shape, low_patch_np, patch_idx, log_progress=False):
         input_depth,
         INPUT,
         hr_shape
-    ).to(device=device).detach()
+    ).to(device=device, dtype=dtype).detach()
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
     out_avg = None
     iteration = 0
     
     # Create low-res target for unsupervised loss
-    low_patch_torch = np_to_torch(low_patch_np).to(device=device)
+    low_patch_torch = np_to_torch(low_patch_np).to(device=device, dtype=dtype)
 
     def closure():
         nonlocal net_input, out_avg, iteration
@@ -253,7 +254,7 @@ def add_noise(image: np.ndarray, std: float) -> np.ndarray:
 
 for i in range(len(dataset)):
     low_img_raw, high_img_raw = dataset[i]
-    
+
     low_img, high_img = crop_lr_hr_pair(low_img_raw, high_img_raw)
 
     sample_name = dataset.low_paths[i].stem if hasattr(dataset, 'low_paths') else f"sample_{i:05d}"
