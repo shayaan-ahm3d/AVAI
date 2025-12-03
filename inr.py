@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ADD_NOISE = True
+SAVE_EVERY = 10
 
 mse = MSELoss()
 # LPIPS model to calculate metrics
@@ -95,8 +96,8 @@ def evaluate_model(model: Module, high_res_image: torch.Tensor, low_res_image: t
     baseline_psnr: float = peak_signal_noise_ratio(gt, low_upsampled_np, data_range=2.0)
     baseline_ssim: float = ssim(gt, low_upsampled_np, data_range=2.0)
     
-    # save every 10 generated images
-    if (index % 1) == 0:
+    # save every n generated images
+    if (index % SAVE_EVERY) == 0:
         _, axes = plt.subplots(nrows=1, ncols=3, figsize=(24, 8))
         axes[0].imshow(convert_pixel_value_range(low_upsampled_np))
         axes[0].set_title(f"Bicubic (PSNR: {baseline_psnr:.2f})", fontsize=20)
