@@ -1,29 +1,27 @@
-import numpy as np
+from dataset import Div2kDataset, Mode
+from utils.common_utils import get_noise, np_to_torch, pil_to_np, torch_to_np, np_to_pil
+from utils.denoising_utils import get_params, optimize
+from utils.sr_utils import get_baselines
+from models import get_net
+
 import torch
 from pathlib import Path
 
-import lpips
-from PIL import Image as PILImage
+import numpy as np
+import matplotlib.pyplot as plt
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
-
-from dataset import Div2kDataset, Mode
-from models import get_net
-from utils.common_utils import get_noise, np_to_pil, np_to_torch, pil_to_np, torch_to_np
-from utils.denoising_utils import get_params, optimize, plot_image_grid
-from utils.sr_utils import crop_image
+import lpips
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
-use_gpu = torch.cuda.is_available()
-device = torch.device('cuda' if use_gpu else 'cpu')
-dtype = torch.float32
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 PLOT = False
 
 low_res_path = Path("dataset/DIV2K_valid_LR_x8")
 high_res_path = Path("dataset/DIV2K_valid_HR")
-dataset = Div2kDataset(low_res_path, high_res_path, Mode.VALIDATE)
+dataset = Div2kDataset(low_res_path, high_res_path, transform=lambda x: x, mode=Mode.TRAIN)
 
 # Optimization and network hyperparameters
 pad = 'reflection'
@@ -36,12 +34,14 @@ show_every = 100
 exp_weight = 0.99
 num_iter = 500
 input_depth = 3
+ENABLE_NOISE = True
+NOISE_STD = 0.01
 
-# Patchify settings
+# Patch-specific settings
 PATCH_SIZE = 256
-PATCH_OVERLAP = 64
+PATCH_OVERLAP = 0
 
-OUTPUT_DIR = Path("data/valid_sr")
+OUTPUT_DIR = Path("outputs/DIP")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 lpips_model = lpips.LPIPS().to(device)
@@ -61,7 +61,7 @@ def build_sr_net():
         num_scales=5,
         upsample_mode='bilinear',
     )
-    return net.to(device=device, dtype=dtype)
+    return net.to(device=device)
 
 
 def _sliding_window_indices(length, window, stride):
@@ -91,18 +91,20 @@ def generate_patch_coords(height, width, patch_size, overlap):
             yield top, left, bottom, right
 
 
-def run_dip_on_patch(high_patch_np, patch_idx, log_progress=False):
+def run_dip_on_patch(hr_shape, low_patch_np, patch_idx, log_progress=False):
     net = build_sr_net()
     net_input = get_noise(
         input_depth,
         INPUT,
-        (high_patch_np.shape[1], high_patch_np.shape[2])
-    ).to(device=device, dtype=dtype).detach()
+        hr_shape
+    ).to(device=device).detach()
     net_input_saved = net_input.detach().clone()
     noise = net_input.detach().clone()
     out_avg = None
     iteration = 0
-    high_patch_torch = np_to_torch(high_patch_np).to(device=device, dtype=dtype)
+    
+    # Create low-res target for unsupervised loss
+    low_patch_torch = np_to_torch(low_patch_np).to(device=device)
 
     def closure():
         nonlocal net_input, out_avg, iteration
@@ -117,7 +119,10 @@ def run_dip_on_patch(high_patch_np, patch_idx, log_progress=False):
         else:
             out_avg = out_avg * exp_weight + out.detach() * (1.0 - exp_weight)
 
-        loss = mse(out, high_patch_torch)
+        # Downsample the network output to match the low-res target
+        out_downsampled = torch.nn.functional.interpolate(out, size=low_patch_torch.shape[-2:], mode='bicubic', align_corners=False)
+        
+        loss = mse(out_downsampled, low_patch_torch)
         loss.backward()
 
         if log_progress and patch_idx == 0 and iteration % show_every == 0:
@@ -152,8 +157,32 @@ def _lpips(chw_a, chw_b):
     return float(score.squeeze().cpu().numpy())
 
 
+def crop_lr_hr_pair(low_img_raw, high_img_raw, factor=8, divisible_by=32):
+    w_lr, h_lr = low_img_raw.size
+    w_lr_new = w_lr - w_lr % divisible_by
+    h_lr_new = h_lr - h_lr % divisible_by
+    
+    left_lr = (w_lr - w_lr_new) // 2
+    top_lr = (h_lr - h_lr_new) // 2
+    
+    low_img = low_img_raw.crop((left_lr, top_lr, left_lr + w_lr_new, top_lr + h_lr_new))
+    
+    left_hr = left_lr * factor
+    top_hr = top_lr * factor
+    w_hr_new = w_lr_new * factor
+    h_hr_new = h_lr_new * factor
+    
+    high_img = high_img_raw.crop((left_hr, top_hr, left_hr + w_hr_new, top_hr + h_hr_new))
+    
+    return low_img, high_img
+
+
 def super_resolve_image(low_img, high_img, log_progress=False):
     low_np = pil_to_np(low_img)
+    if ENABLE_NOISE:
+        low_np = add_noise(low_np, std=NOISE_STD)
+    
+    low_img_for_baselines = np_to_pil(low_np)
     high_np = pil_to_np(high_img)
 
     height, width = high_np.shape[1:]
@@ -165,8 +194,15 @@ def super_resolve_image(low_img, high_img, log_progress=False):
     weight_map = np.zeros((1, height, width), dtype=np.float32)
 
     for idx, (top, left, bottom, right) in enumerate(patch_coords):
-        high_patch_np = high_np[:, top:bottom, left:right]
-        patch_out = run_dip_on_patch(high_patch_np, idx, log_progress=log_progress)
+        # high_patch_np = high_np[:, top:bottom, left:right]
+        
+        top_lr, left_lr = top // 8, left // 8
+        bottom_lr, right_lr = bottom // 8, right // 8
+        low_patch_np = low_np[:, top_lr:bottom_lr, left_lr:right_lr]
+        
+        hr_shape = (bottom - top, right - left)
+
+        patch_out = run_dip_on_patch(hr_shape, low_patch_np, idx, log_progress=log_progress)
 
         ph = min(patch_out.shape[1], bottom - top)
         pw = min(patch_out.shape[2], right - left)
@@ -179,8 +215,7 @@ def super_resolve_image(low_img, high_img, log_progress=False):
 
     final_output = reconstruction / np.clip(weight_map, 1e-8, None)
 
-    lr_bicubic = low_img.resize(high_img.size, PILImage.Resampling.BICUBIC)
-    lr_bicubic_np = pil_to_np(lr_bicubic)
+    lr_bicubic_np, lr_bic_sharp_np, lr_nearest_np = get_baselines(low_img_for_baselines, high_img)
 
     baseline_psnr = peak_signal_noise_ratio(high_np, lr_bicubic_np)
     final_psnr = peak_signal_noise_ratio(high_np, final_output)
@@ -206,19 +241,24 @@ def super_resolve_image(low_img, high_img, log_progress=False):
 all_psnr = []
 all_ssim = []
 all_lpips = []
-metrics_log_path = OUTPUT_DIR / "val_metrics.log"
+metric_filename = f"dip_noisy_std={NOISE_STD}.csv" if ENABLE_NOISE else "dip.csv"
+metrics_log_path = OUTPUT_DIR / metric_filename
 metrics_log_path.write_text(
-    "sample,baseline_psnr,dip_psnr,baseline_ssim,dip_ssim,baseline_lpips,dip_lpips,num_patches\n",
-    encoding="utf-8",
+    "sample,baseline_psnr,dip_psnr,baseline_ssim,dip_ssim,baseline_lpips,dip_lpips,num_patches\n"
 )
 
-for sample_idx in range(len(dataset)):
-    low_img_raw, high_img_raw = dataset[sample_idx]
-    low_img = crop_image(low_img_raw)
-    high_img = crop_image(high_img_raw)
-    sample_name = dataset.low_paths[sample_idx].stem if hasattr(dataset, 'low_paths') else f"sample_{sample_idx:05d}"
+def add_noise(image: np.ndarray, std: float) -> np.ndarray:
+    awgn = np.random.normal(loc=0.0, scale=std, size=image.shape)
+    return np.clip(image + awgn, 0.0, 1.0)
 
-    log_progress = PLOT and sample_idx == 0
+for i in range(len(dataset)):
+    low_img_raw, high_img_raw = dataset[i]
+    
+    low_img, high_img = crop_lr_hr_pair(low_img_raw, high_img_raw)
+
+    sample_name = dataset.low_paths[i].stem if hasattr(dataset, 'low_paths') else f"sample_{i:05d}"
+
+    log_progress = PLOT and i == 0
 
     (
         final_output,
@@ -234,18 +274,38 @@ for sample_idx in range(len(dataset)):
         num_patches,
     ) = super_resolve_image(low_img, high_img, log_progress=log_progress)
 
-    output_img = np_to_pil(np.clip(final_output, 0, 1))
-    output_path = OUTPUT_DIR / f"{sample_name}_sr.png"
-    output_img.save(output_path)
-
     print(
-        f"[{sample_idx + 1}/{len(dataset)}] {sample_name}: "
+        f"[{i + 1}/{len(dataset)}] {sample_name}: "
         f"baseline {baseline_psnr:.2f} dB / {baseline_ssim:.3f} SSIM / {baseline_lpips:.3f} LPIPS -> "
         f"DIP {final_psnr:.2f} dB / {final_ssim:.3f} SSIM / {final_lpips:.3f} LPIPS ({num_patches} patches)."
     )
-    print(f"Saved output to {output_path}")
 
-    with metrics_log_path.open("a", encoding="utf-8") as log_file:
+    if i % 10 == 0:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Bicubic
+        axes[0].imshow(np.clip(lr_bicubic_np.transpose(1, 2, 0), 0, 1))
+        axes[0].set_title(f"Bicubic\nPSNR: {baseline_psnr:.2f} dB")
+        axes[0].axis('off')
+        
+        # DIP
+        axes[1].imshow(np.clip(final_output.transpose(1, 2, 0), 0, 1))
+        axes[1].set_title(f"DIP\nPSNR: {final_psnr:.2f} dB")
+        axes[1].axis('off')
+        
+        # Ground Truth
+        axes[2].imshow(np.clip(high_np.transpose(1, 2, 0), 0, 1))
+        axes[2].set_title("Ground Truth")
+        axes[2].axis('off')
+        
+        comparative_figure_filename = f"{sample_name}_comparison.png" if not ENABLE_NOISE else f"{sample_name}_noise_std={NOISE_STD}_comparison.png"
+        comparative_figure_path = OUTPUT_DIR / comparative_figure_filename
+        plt.tight_layout()
+        plt.savefig(comparative_figure_path)
+        plt.close(fig)
+        print(f"Saved output to {comparative_figure_path}")
+
+    with metrics_log_path.open("a") as log_file:
         log_file.write(
             f"{sample_name},{baseline_psnr:.4f},{final_psnr:.4f},{baseline_ssim:.4f},{final_ssim:.4f},{baseline_lpips:.4f},{final_lpips:.4f},{num_patches}\n"
         )
@@ -263,5 +323,5 @@ if all_psnr:
         f'{avg_psnr:.2f} dB PSNR, {avg_ssim:.3f} SSIM, {avg_lpips:.3f} LPIPS'
     )
     print(summary)
-    with metrics_log_path.open("a", encoding="utf-8") as log_file:
+    with metrics_log_path.open("a") as log_file:
         log_file.write(summary + "\n")
