@@ -53,7 +53,7 @@ class SineLayer(nn.Module):
 class Siren(nn.Module):
     """ SIREN architecture """
 
-    def __init__(self, in_features, out_features, hidden_features=256, hidden_layers=3, outermost_linear=False,
+    def __init__(self, in_features, out_features, hidden_features=256, hidden_layers=5, outermost_linear=False,
                  first_omega_0=30, hidden_omega_0=30.):
         super().__init__()
 

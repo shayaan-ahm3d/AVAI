@@ -12,6 +12,7 @@ from lpips import LPIPS
 import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ADD_NOISE = True
 
 mse = MSELoss()
 # LPIPS model to calculate metrics
@@ -50,7 +51,7 @@ def train_model(model: Module, low_res_image: torch.Tensor, steps: int) -> None:
         optimiser.step()
 
 @torch.no_grad()
-def evaluate_model(model: Module, high_res_image: torch.Tensor, index: int) -> tuple[float, float, float, float]:
+def evaluate_model(model: Module, high_res_image: torch.Tensor, low_res_image: torch.Tensor, index: int) -> tuple[float, float, float, float, float, float, float]:
     model.eval()
     input_coords, ground_truth_pixel_values = Div2kDataset.get_coordinate_to_pixel_value_mapping(high_res_image)
     input_coords = input_coords.to(DEVICE)
@@ -69,33 +70,50 @@ def evaluate_model(model: Module, high_res_image: torch.Tensor, index: int) -> t
     # image tensors should already be [-1, 1] for LPIPS
     lpips_score = lpips_model(gt.permute(2, 0, 1).unsqueeze(0), out.permute(2, 0, 1).unsqueeze(0)).cpu().item()
 
+    # Baseline metrics
+    low_upsampled = torch.nn.functional.interpolate(
+        low_res_image.unsqueeze(0),
+        size=high_res_image.shape[1:],
+        mode='bicubic',
+        align_corners=False
+    ).squeeze(0)
+    
+    baseline_lpips = lpips_model(gt.permute(2, 0, 1).unsqueeze(0), low_upsampled.unsqueeze(0)).cpu().item()
+
     model_output_pixel_values = model_output_pixel_values.cpu()
     ground_truth_pixel_values = ground_truth_pixel_values.cpu()
     loss: float = mse(model_output_pixel_values, ground_truth_pixel_values).item()
 
     gt = gt.cpu().numpy()
     out = out.cpu().numpy()
+    low_upsampled_np = low_upsampled.permute(1, 2, 0).cpu().numpy()
+
     # convert to NumPy arrays for these metrics
-    psnr: float = peak_signal_noise_ratio(gt, out)
+    psnr: float = peak_signal_noise_ratio(gt, out, data_range=2.0)
     mean_ssim: float = ssim(gt, out, data_range=2.0)
+    
+    baseline_psnr: float = peak_signal_noise_ratio(gt, low_upsampled_np, data_range=2.0)
+    baseline_ssim: float = ssim(gt, low_upsampled_np, data_range=2.0)
     
     # save every 10 generated images
     if (index % 1) == 0:
-        _, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 8))
-        axes[0].imshow(convert_pixel_value_range(gt))
-        axes[0].set_title("Ground Truth", fontsize=20)
+        _, axes = plt.subplots(nrows=1, ncols=3, figsize=(24, 8))
+        axes[0].imshow(convert_pixel_value_range(low_upsampled_np))
+        axes[0].set_title(f"Bicubic (PSNR: {baseline_psnr:.2f})", fontsize=20)
         axes[1].imshow(convert_pixel_value_range(out))
-        axes[1].set_title("Model Output", fontsize=20)
+        axes[1].set_title(f"Model Output (PSNR: {psnr:.2f})", fontsize=20)
+        axes[2].imshow(convert_pixel_value_range(gt))
+        axes[2].set_title("Ground Truth", fontsize=20)
         
-        plt.savefig(f"outputs/INR/{index}-SISR")
+        plt.savefig(f"outputs/INR/{index}-SISR.png")
         plt.close()
 
     del gt, out
-    return loss, psnr, mean_ssim, lpips_score
+    return loss, psnr, mean_ssim, lpips_score, baseline_psnr, baseline_ssim, baseline_lpips
 
 if __name__ == "__main__":
     log_file: Path = Path("outputs/INR/inr.csv")
-    log_file.write_text("image,loss,psnr,ssim,lpips\n")
+    log_file.write_text("image,loss,psnr,ssim,lpips,baseline_psnr,baseline_ssim,baseline_lpips\n")
 
     with log_file.open("a") as log:
         for i, (low, high) in enumerate(iter(dataset)):
@@ -108,18 +126,23 @@ if __name__ == "__main__":
             optimiser = torch.optim.Adam(super_resolve.parameters() , lr=1e-5)
 
             low = low.to(DEVICE)
+            if ADD_NOISE:
+                low += torch.normal(0.0, 0.1, low.shape).to(DEVICE) # AWGN
             train_model(super_resolve, low, total_steps)
-            low = low.cpu()
-            del low
+            # low = low.cpu()
+            # del low
 
             high = high.to(DEVICE)
             lpips_model = lpips_model.to(DEVICE)
-            loss, psnr, mean_ssim, lpips_score = evaluate_model(super_resolve, high, i)
+            loss, psnr, mean_ssim, lpips_score, b_psnr, b_ssim, b_lpips = evaluate_model(super_resolve, high, low, i)
+            
+            low = low.cpu()
+            del low
             high = high.cpu()
             lpips_model = lpips_model.cpu()
             del high
 
-            log.write(f"{i},{loss:.4f},{psnr:.4f},{mean_ssim:.4f},{lpips_score:.4f}\n")
+            log.write(f"{i},{loss:.4f},{psnr:.4f},{mean_ssim:.4f},{lpips_score:.4f},{b_psnr:.4f},{b_ssim:.4f},{b_lpips:.4f}\n")
             # try to prevent out of memory error
             super_resolve = super_resolve.cpu()
             del super_resolve
