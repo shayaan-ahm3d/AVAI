@@ -123,14 +123,12 @@ if __name__ == "__main__":
                                   hidden_features=256,
                                   hidden_layers=3,
                                   outermost_linear=True).to(DEVICE)
-            optimiser = torch.optim.Adam(super_resolve.parameters() , lr=1e-5)
+            optimiser = torch.optim.Adam(super_resolve.parameters() , lr=1e-4)
 
             low = low.to(DEVICE)
             if ADD_NOISE:
                 low += torch.normal(0.0, 0.1, low.shape).to(DEVICE) # AWGN
             train_model(super_resolve, low, total_steps)
-            # low = low.cpu()
-            # del low
 
             high = high.to(DEVICE)
             lpips_model = lpips_model.to(DEVICE)
