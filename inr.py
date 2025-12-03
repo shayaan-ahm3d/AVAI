@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ADD_NOISE = True
+NOISE_STD = 0.1
 SAVE_EVERY = 10
 
 mse = MSELoss()
@@ -106,17 +107,20 @@ def evaluate_model(model: Module, high_res_image: torch.Tensor, low_res_image: t
         axes[2].imshow(convert_pixel_value_range(gt))
         axes[2].set_title("Ground Truth", fontsize=20)
         
-        plt.savefig(f"outputs/INR/{index}-SISR.png")
+        figure_path: str = f"outputs/INR/{index}.png" if not ADD_NOISE else f"outputs/INR/{index}_noise_std={NOISE_STD}.png"
+        plt.savefig(figure_path)
         plt.close()
 
     del gt, out
     return loss, psnr, mean_ssim, lpips_score, baseline_psnr, baseline_ssim, baseline_lpips
 
 if __name__ == "__main__":
-    log_file: Path = Path("outputs/INR/inr.csv")
-    log_file.write_text("image,loss,psnr,ssim,lpips,baseline_psnr,baseline_ssim,baseline_lpips\n")
+    log_dir = Path("outputs/INR")
+    log_filename: str = "inr.csv" if not ADD_NOISE else f"inr_noise_std={NOISE_STD}.csv"
+    log_path = log_dir / log_filename
+    log_path.write_text("image,loss,psnr,ssim,lpips,baseline_psnr,baseline_ssim,baseline_lpips\n")
 
-    with log_file.open("a") as log:
+    with log_path.open("a") as log:
         for i, (low, high) in enumerate(iter(dataset)):
             # SIREN super resolution model: (x, y) -> (R, G, B)
             super_resolve = Siren(in_features=2,
@@ -128,7 +132,7 @@ if __name__ == "__main__":
 
             low = low.to(DEVICE)
             if ADD_NOISE:
-                low += torch.normal(0.0, 0.1, low.shape).to(DEVICE) # AWGN
+                low += torch.normal(0.0, NOISE_STD, low.shape).to(DEVICE) # AWGN
             train_model(super_resolve, low, total_steps)
 
             high = high.to(DEVICE)
