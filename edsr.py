@@ -1,6 +1,6 @@
 from dataset import Div2kDataset, Mode
 from edsr_model import Edsr
-from edsr_utils import get_random_patch, log_metrics
+from edsr_utils import get_random_patch, log_metrics, get_unique_log_dir
 from inr_utils import ssim
 
 from pathlib import Path
@@ -179,7 +179,8 @@ def train(model: Module,
                 }, LOG_DIR / f"edsr_x{SCALE}_psnr={val_psnr}.pth")
                 print(f"Saved best model (PSNR: {val_psnr:.2f})")
 
-logger = SummaryWriter( "logs", flush_secs=5)
+log_dir: str = get_unique_log_dir(log_dir=Path("logs"), scale=SCALE, learning_rate=LEARNING_RATE, log_name="edsr")
+logger = SummaryWriter(log_dir=log_dir, flush_secs=5)
 
 model = Edsr(scale=SCALE, n_resblocks=N_RESBLOCKS, n_feats=N_FEATS).to(DEVICE)
 
@@ -212,3 +213,4 @@ train(model, train_dataloader, val_dataloader, criterion, optimiser, logger)
 print("Running final test...")
 test_psnr, test_ssim, test_lpips = test(model, test_dataloader)
 print(f"Test Results - PSNR: {test_psnr:.2f} dB, SSIM: {test_ssim:.4f}, LPIPS: {test_lpips:.4f}")
+logger.close()
