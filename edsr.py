@@ -130,16 +130,15 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
             acc_psnr += p_val
             acc_ssim += s_val
             
-            # Bicubic Metrics (for annotation)
+            # Bicubic metrics
             b_p_val = peak_signal_noise_ratio(high_np, bicubic_np, data_range=1.0)
             b_s_val = ssim(high_np, bicubic_np, data_range=1.0)
-            # Calculate LPIPS for bicubic individually
+            
             b_l_val = lpips_model(high_tensor[j:j+1] * 2 - 1, bicubic[j:j+1] * 2 - 1).item()
             
             # Create annotated images
             bicubic_labeled = add_labels(bicubic[j], b_p_val, b_s_val, b_l_val, "Bicubic")
             pred_labeled = add_labels(output[j], p_val, s_val, l_val, "EDSR")
-            # For GT, we don't really have metrics (perfect), so just label
             gt_labeled = add_labels(high[j], float('inf'), 1.0, 0.0, "Ground Truth")
             
             # Concatenate images side-by-side (dim=2 is width)
