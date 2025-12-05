@@ -22,10 +22,10 @@ from lpips import LPIPS
 SCALE = 4 # Super-resolution factor
 N_RESBLOCKS = 16 # Number of residual blocks
 N_FEATS = 64 # Number of filters
-PATCH_SIZE = 48 # Low patch size (High patch size will be PATCH_SIZE * SCALE)
-BATCH_SIZE = 700
+PATCH_SIZE = 24 # Low patch size (High patch size will be PATCH_SIZE * SCALE)
+BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
-EPOCHS = 1000
+EPOCHS = 20
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
