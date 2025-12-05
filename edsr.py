@@ -245,6 +245,6 @@ if __name__ == "__main__":
 
     print("Running inference...")
     test_psnr, test_ssim, test_lpips = test(model, test_dataloader)
-    print(f"Test - PSNR: {test_psnr:.2f} dB | SSIM: {test_ssim:.4f} | LPIPS: {test_lpips:.4f}")
+    print(f"Test - PSNR: {test_psnr:.4f} dB | SSIM: {test_ssim:.4f} | LPIPS: {test_lpips:.4f}")
 
     logger.close()
