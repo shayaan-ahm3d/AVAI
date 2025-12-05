@@ -59,21 +59,24 @@ def validate(model: Module, dataloader: DataLoader) -> tuple[float, float]:
 
     acc_psnr = 0.0
     acc_ssim = 0.0
+    num_images = 0
     
     for i, (low, high) in enumerate(dataloader):
         low_tensor: Tensor = low.to(DEVICE)
         
         output: Tensor = model(low_tensor)
         
-        # Metrics need NumpPy array, (B, C, H, W) -> (H, W, C)
-        output_np: np.ndarray = output.squeeze(0).cpu().numpy().transpose(1, 2, 0).clip(0, 1)
-        high_np: np.ndarray = high.squeeze(0).numpy().transpose(1, 2, 0)
-        
-        acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
-        acc_ssim += ssim(high_np, output_np, data_range=1.0)
+        # Iterate over batch
+        for j in range(low_tensor.size(0)):
+            output_np: np.ndarray = output[j].cpu().numpy().transpose(1, 2, 0).clip(0, 1)
+            high_np: np.ndarray = high[j].numpy().transpose(1, 2, 0)
+            
+            acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
+            acc_ssim += ssim(high_np, output_np, data_range=1.0)
+            num_images += 1
 
-    mean_psnr: float = acc_psnr / len(dataloader)
-    mean_ssim: float = acc_ssim / len(dataloader)
+    mean_psnr: float = acc_psnr / num_images if num_images > 0 else 0.0
+    mean_ssim: float = acc_ssim / num_images if num_images > 0 else 0.0
 
     return mean_psnr, mean_ssim
 
@@ -86,6 +89,7 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
     acc_psnr = 0.0
     acc_ssim = 0.0
     acc_lpips = 0.0
+    num_images = 0
 
     for i, (low, high) in enumerate(dataloader):
         low_tensor: Tensor = low.to(DEVICE)
@@ -93,23 +97,25 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
         
         output: Tensor = model(low_tensor)
         
-        # Metrics need NumpPy array, (B, C, H, W) -> (H, W, C)
-        output_np: np.ndarray = output.squeeze(0).cpu().numpy().transpose(1, 2, 0).clip(0, 1)
-        high_np: np.ndarray = high.squeeze(0).numpy().transpose(1, 2, 0)
-        
-        acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
-        acc_ssim += ssim(high_np, output_np, data_range=1.0)
-
         # LPIPS needs a tensor in (B, C, H, W) format within range [-1, 1]
         output_scaled = output.clamp(0, 1) * 2.0 - 1.0
         high_scaled = high_tensor * 2.0 - 1.0
         
-        # .item() to get float value and detach from graph
-        acc_lpips += lpips_model(high_scaled, output_scaled).item()
+        # lpips_model returns (B, 1, 1, 1)
+        acc_lpips += lpips_model(high_scaled, output_scaled).sum().item()
 
-    mean_psnr: float = acc_psnr / len(dataloader)
-    mean_ssim: float = acc_ssim / len(dataloader)
-    mean_lpips: float = acc_lpips / len(dataloader)
+        # Metrics need NumpPy array, (B, C, H, W) -> (H, W, C)
+        for j in range(low_tensor.size(0)):
+            output_np: np.ndarray = output[j].cpu().numpy().transpose(1, 2, 0).clip(0, 1)
+            high_np: np.ndarray = high[j].numpy().transpose(1, 2, 0)
+            
+            acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
+            acc_ssim += ssim(high_np, output_np, data_range=1.0)
+            num_images += 1
+
+    mean_psnr: float = acc_psnr / num_images if num_images > 0 else 0.0
+    mean_ssim: float = acc_ssim / num_images if num_images > 0 else 0.0
+    mean_lpips: float = acc_lpips / num_images if num_images > 0 else 0.0
 
     return mean_psnr, mean_ssim, mean_lpips
 
@@ -183,10 +189,12 @@ test_dataset = Div2kDataset(test_low_path, test_high_path, transform, mode=Mode.
 train_dataset, val_dataset = torch.utils.data.random_split(train_val_dataset, [0.8, 0.2])
 
 train_dataset_patched = PatchedDataset(train_dataset, PATCH_SIZE, SCALE)
+val_dataset_patched = PatchedDataset(val_dataset, PATCH_SIZE, SCALE)
+test_dataset_patched = PatchedDataset(test_dataset, PATCH_SIZE, SCALE)
 
 train_dataloader = DataLoader(train_dataset_patched, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=cpu_count())
-val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, pin_memory=True, num_workers=cpu_count())
-test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False, pin_memory=True, num_workers=cpu_count())
+val_dataloader = DataLoader(val_dataset_patched, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True, num_workers=cpu_count())
+test_dataloader = DataLoader(test_dataset_patched, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True, num_workers=cpu_count())
 
 print(f"Loaded {len(train_dataset)} training images")
 print(f"Loaded {len(val_dataset)} validation images")
