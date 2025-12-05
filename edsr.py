@@ -12,7 +12,6 @@ from torch import Tensor
 import torch.nn as nn
 from torch.nn import Module
 from torch.utils.data import DataLoader, Dataset
-from torch import optim
 from torch.optim import Optimizer, Adam
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import ToTensor, Compose
@@ -26,7 +25,7 @@ N_FEATS = 64 # Number of filters
 PATCH_SIZE = 24 # Low patch size (High patch size will be PATCH_SIZE * SCALE)
 BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
-EPOCHS = 20
+EPOCHS = 700
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -117,7 +116,7 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
             acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
             acc_ssim += ssim(high_np, output_np, data_range=1.0)
             
-            save_image(output[j].clamp(0, 1), OUTPUT_DIR / f"test_{num_images}.png")
+            save_image(output[j].clamp(0, 1), OUTPUT_DIR / f"EDSR_test_{num_images + 1}.png")
             num_images += 1
 
     mean_psnr: float = acc_psnr / num_images if num_images > 0 else 0.0
