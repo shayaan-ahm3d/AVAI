@@ -16,6 +16,7 @@ from torch import optim
 from torch.optim import Optimizer, Adam
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import ToTensor, Compose
+from torchvision.utils import save_image
 from skimage.metrics import peak_signal_noise_ratio
 from lpips import LPIPS
 
@@ -29,6 +30,8 @@ EPOCHS = 20
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = Path("outputs/EDSR")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 VAL_EVERY = 100
 CHECKPOINT_EVERY = 10
 
@@ -48,7 +51,7 @@ class PatchedDataset(Dataset):
 
     def __getitem__(self, idx):
         low, high = self.dataset[idx]
-        # Perform crop HERE, inside the worker process
+        # crop here to minimise memory usage
         low_patch, high_patch = get_random_patch(low, high, self.patch_size, self.scale)
         return low_patch, high_patch
 
@@ -91,6 +94,8 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
     acc_lpips = 0.0
     num_images = 0
 
+    print(f"Saving test images to {OUTPUT_DIR}")
+
     for i, (low, high) in enumerate(dataloader):
         low_tensor: Tensor = low.to(DEVICE)
         high_tensor: Tensor = high.to(DEVICE)
@@ -111,6 +116,8 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
             
             acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
             acc_ssim += ssim(high_np, output_np, data_range=1.0)
+            
+            save_image(output[j].clamp(0, 1), OUTPUT_DIR / f"test_{num_images}.png")
             num_images += 1
 
     mean_psnr: float = acc_psnr / num_images if num_images > 0 else 0.0
