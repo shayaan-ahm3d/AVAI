@@ -32,7 +32,6 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR = Path("outputs/EDSR")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 VAL_EVERY = 100
-CHECKPOINT_EVERY = 10
 
 low_path = Path("dataset/DIV2K_train_LR_x8")
 high_path = Path("dataset/DIV2K_train_HR")
@@ -116,7 +115,9 @@ def test(model: Module, dataloader: DataLoader) -> tuple[float, float, float]:
             acc_psnr += peak_signal_noise_ratio(high_np, output_np, data_range=1.0)
             acc_ssim += ssim(high_np, output_np, data_range=1.0)
             
-            save_image(output[j].clamp(0, 1), OUTPUT_DIR / f"EDSR_test_{num_images + 1}.png")
+            # Create single image of output and ground truth
+            combined = torch.cat((output[j].cpu().clamp(0, 1), high[j]), dim=2)
+            save_image(combined, OUTPUT_DIR / f"EDSR_test_{num_images + 1}.png")
             num_images += 1
 
     mean_psnr: float = acc_psnr / num_images if num_images > 0 else 0.0
@@ -209,7 +210,8 @@ print(f"Loaded {len(test_dataset)} test images")
 
 train(model, train_dataloader, val_dataloader, criterion, optimiser, logger)
 
-print("Running final test...")
+print("TESTING")
 test_psnr, test_ssim, test_lpips = test(model, test_dataloader)
-print(f"Test Results - PSNR: {test_psnr:.2f} dB, SSIM: {test_ssim:.4f}, LPIPS: {test_lpips:.4f}")
+print(f"Test - PSNR: {test_psnr:.2f} dB | SSIM: {test_ssim:.4f} | LPIPS: {test_lpips:.4f}")
+
 logger.close()
